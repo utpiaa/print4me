@@ -1,0 +1,39 @@
+# Node
+node_modules/
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Expo / React Native
+.expo/
+.expo-shared/
+.DS_Store
+*.iml
+.gradle/
+*.keystore
+
+# Build outputs
+**/dist/
+**/build/
+**/.expo/
+
+# Environment
+server/.env
+server/.env.*
+client/.env
+client/.env.*
+
+# Uploads and cache
+server/uploads/
+**/tmp/
+**/cache/
+
+# Logs
+logs/
+**/*.log
+
+# IDE
+.vscode/
+.idea/
