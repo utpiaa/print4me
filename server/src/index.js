@@ -191,6 +191,12 @@ function buildTransport() {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASS,
       },
+      pool: true,
+      maxConnections: 1,
+      maxMessages: 100,
+      connectionTimeout: 20000,
+      greetingTimeout: 20000,
+      socketTimeout: 60000,
     });
   }
   // Fallback: try Gmail with app password if provided in ENV
@@ -201,6 +207,12 @@ function buildTransport() {
         user: process.env.GMAIL_USER,
         pass: process.env.GMAIL_APP_PASSWORD,
       },
+      pool: true,
+      maxConnections: 1,
+      maxMessages: 100,
+      connectionTimeout: 20000,
+      greetingTimeout: 20000,
+      socketTimeout: 60000,
     });
   }
   throw new Error('Email transport is not configured. Provide SMTP_* or GMAIL_USER/GMAIL_APP_PASSWORD in .env');
@@ -327,37 +339,57 @@ app.post('/api/print-request', upload.array('files', 5), async (req, res) => {
       </ul>
     `;
 
-    const attachments = req.files.map((f) => ({
-      filename: f.originalname,
-      path: f.path,
-    }));
+    // Decide whether to attach files based on combined size
+    const combinedSize = (req.files || []).reduce((s, f) => s + (Number(f.size) || 0), 0);
+    const ATTACHMENT_LIMIT = Number(process.env.ATTACHMENT_LIMIT_BYTES || 20 * 1024 * 1024); // 20MB
+    let attachments = [];
+    let noteTooLarge = '';
+    if (combinedSize <= ATTACHMENT_LIMIT) {
+      attachments = req.files.map((f) => ({ filename: f.originalname, path: f.path }));
+    } else {
+      noteTooLarge = `\n\n[Note] Attachments not included (combined size ${(combinedSize/1024/1024).toFixed(1)}MB exceeds limit).`;
+    }
 
     const fromEmail = process.env.FROM_EMAIL || process.env.SMTP_USER || process.env.GMAIL_USER;
 
-    const info = await transporter.sendMail({
-      from: fromEmail,
-      to: adminEmail,
-      subject,
-      text,
-      html,
-      attachments,
+    // Respond to client immediately to avoid timeout
+    try { console.log('print-request queued email send', { filesCount: req.files.length, combinedSize }); } catch(_) {}
+    res.json({ ok: true, queued: true, pages: pagesNum, estimatedTotal });
+
+    // Send email in background and clean up
+    setImmediate(async () => {
+      try {
+        const info = await transporter.sendMail({
+          from: fromEmail,
+          to: adminEmail,
+          subject,
+          text: text + noteTooLarge,
+          html: html + (noteTooLarge ? `<p><em>${escapeHtml(noteTooLarge)}</em></p>` : ''),
+          attachments,
+        });
+        try { console.log('print-request email sent', { messageId: info.messageId }); } catch(_) {}
+      } catch (err) {
+        console.error('Email send error (background):', err);
+      } finally {
+        if (req.files) {
+          for (const f of req.files) {
+            try { fs.unlinkSync(f.path); } catch (_) {}
+          }
+        }
+      }
     });
-
-    // Clean up files after sending
-    for (const f of req.files) {
-      try { fs.unlinkSync(f.path); } catch (_) {}
-    }
-
-    res.json({ ok: true, messageId: info.messageId });
   } catch (err) {
-    console.error('Email send error:', err);
+    console.error('Email prepare error:', err);
     // Clean up files on error
     if (req.files) {
       for (const f of req.files) {
         try { fs.unlinkSync(f.path); } catch (_) {}
       }
     }
-    res.status(500).json({ ok: false, error: err.message });
+    // Only respond if not already sent
+    if (!res.headersSent) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
   }
 });
 
