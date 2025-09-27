@@ -189,7 +189,10 @@ async function sendEmail(to, subject, text, html, attachments = []) {
       
       const msg = {
         to,
-        from: fromEmail,
+        from: {
+          email: fromEmail,
+          name: 'Print4me Service'
+        },
         subject,
         text,
         html,
@@ -198,7 +201,11 @@ async function sendEmail(to, subject, text, html, attachments = []) {
           content: fs.readFileSync(att.path).toString('base64'),
           type: 'application/octet-stream',
           disposition: 'attachment'
-        }))
+        })),
+        categories: ['print-request'],
+        customArgs: {
+          service: 'print4me'
+        }
       };
       
       const result = await sgMail.send(msg);
