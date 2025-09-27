@@ -1,0 +1,37 @@
+{
+  "cli": {
+    "version": ">= 8.3.0"
+  },
+  "build": {
+    "preview": {
+      "developmentClient": false,
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "ios": {
+        "simulator": false
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://print4me.onrender.com"
+      }
+    },
+    "production": {
+      "distribution": "store",
+      "android": {
+        "gradleCommand": ":app:bundleRelease",
+        "withoutCredentials": false
+      },
+      "ios": {
+        "simulator": false,
+        "resourceClass": "m-medium"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://print4me.onrender.com"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}

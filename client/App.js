@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { SafeAreaView, View, Text, TextInput, TouchableOpacity, Alert, Platform, ActivityIndicator, ScrollView, KeyboardAvoidingView } from 'react-native';
+import { SafeAreaView, View, Text, TextInput, TouchableOpacity, Alert, Platform, ActivityIndicator, ScrollView, KeyboardAvoidingView, Linking } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import Constants from 'expo-constants';
 import axios from 'axios';
@@ -391,6 +391,22 @@ export default function App() {
                 ) : null}
               </View>
             ))}
+          </View>
+        </View>
+
+        {/* Legal links */}
+        <View style={{ backgroundColor: theme.card, borderRadius: 12, padding: 12, borderWidth: 1, borderColor: theme.border, marginBottom: 12 }}>
+          <Text style={{ fontWeight: '600', color: theme.text, marginBottom: 8 }}>About</Text>
+          <Text style={{ color: theme.muted, marginBottom: 10 }}>
+            Print4me helps you send print requests with options and pricing.
+          </Text>
+          <View style={{ flexDirection: 'row', gap: 16 }}>
+            <TouchableOpacity onPress={() => Linking.openURL('https://github.com/utpiaa/print4me/blob/main/docs/privacy-policy.md')}>
+              <Text style={{ color: theme.primary, fontWeight: '600' }}>Privacy Policy</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => Linking.openURL('https://github.com/utpiaa/print4me/blob/main/docs/terms.md')}>
+              <Text style={{ color: theme.primary, fontWeight: '600' }}>Terms</Text>
+            </TouchableOpacity>
           </View>
         </View>
 

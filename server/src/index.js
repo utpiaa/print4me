@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const nodemailer = require('nodemailer');
+const sgMail = require('@sendgrid/mail');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -179,6 +180,40 @@ function required(value) {
   return value !== undefined && value !== null && String(value).trim().length > 0;
 }
 
+async function sendEmail(to, subject, text, html, attachments = []) {
+  // Try SendGrid first (cloud-friendly)
+  if (process.env.SENDGRID_API_KEY) {
+    try {
+      sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+      const fromEmail = process.env.FROM_EMAIL || process.env.SENDGRID_FROM_EMAIL || process.env.ADMIN_EMAIL;
+      
+      const msg = {
+        to,
+        from: fromEmail,
+        subject,
+        text,
+        html,
+        attachments: attachments.map(att => ({
+          filename: att.filename,
+          content: fs.readFileSync(att.path).toString('base64'),
+          type: 'application/octet-stream',
+          disposition: 'attachment'
+        }))
+      };
+      
+      const result = await sgMail.send(msg);
+      return { messageId: result[0].headers['x-message-id'] || 'sendgrid-sent' };
+    } catch (err) {
+      console.warn('SendGrid failed:', err.message);
+      // Fall through to nodemailer backup
+    }
+  }
+  
+  // Fallback to nodemailer (for local dev or backup)
+  const transporter = buildTransport();
+  return await transporter.sendMail({ from: process.env.FROM_EMAIL || process.env.SMTP_USER || process.env.GMAIL_USER, to, subject, text, html, attachments });
+}
+
 function buildTransport() {
   // If SMTP details provided, use them (recommended)
   if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
@@ -215,7 +250,7 @@ function buildTransport() {
       socketTimeout: 60000,
     });
   }
-  throw new Error('Email transport is not configured. Provide SMTP_* or GMAIL_USER/GMAIL_APP_PASSWORD in .env');
+  throw new Error('Email transport is not configured. Provide SENDGRID_API_KEY or SMTP_* or GMAIL_USER/GMAIL_APP_PASSWORD in .env');
 }
 
 app.post('/api/print-request', upload.array('files', 5), async (req, res) => {
@@ -303,8 +338,6 @@ app.post('/api/print-request', upload.array('files', 5), async (req, res) => {
     const adminEmail = process.env.ADMIN_EMAIL;
     if (!adminEmail) throw new Error('ADMIN_EMAIL is not set');
 
-    const transporter = buildTransport();
-
     const subject = `Print4me - New Print Request from ${name}`;
     const text = `You have a new print request.\n\n` +
       `Name: ${name}\n` +
@@ -350,8 +383,6 @@ app.post('/api/print-request', upload.array('files', 5), async (req, res) => {
       noteTooLarge = `\n\n[Note] Attachments not included (combined size ${(combinedSize/1024/1024).toFixed(1)}MB exceeds limit).`;
     }
 
-    const fromEmail = process.env.FROM_EMAIL || process.env.SMTP_USER || process.env.GMAIL_USER;
-
     // Respond to client immediately to avoid timeout
     try { console.log('print-request queued email send', { filesCount: req.files.length, combinedSize }); } catch(_) {}
     res.json({ ok: true, queued: true, pages: pagesNum, estimatedTotal });
@@ -359,14 +390,13 @@ app.post('/api/print-request', upload.array('files', 5), async (req, res) => {
     // Send email in background and clean up
     setImmediate(async () => {
       try {
-        const info = await transporter.sendMail({
-          from: fromEmail,
-          to: adminEmail,
+        const info = await sendEmail(
+          adminEmail,
           subject,
-          text: text + noteTooLarge,
-          html: html + (noteTooLarge ? `<p><em>${escapeHtml(noteTooLarge)}</em></p>` : ''),
-          attachments,
-        });
+          text + noteTooLarge,
+          html + (noteTooLarge ? `<p><em>${escapeHtml(noteTooLarge)}</em></p>` : ''),
+          attachments
+        );
         try { console.log('print-request email sent', { messageId: info.messageId }); } catch(_) {}
       } catch (err) {
         console.error('Email send error (background):', err);
