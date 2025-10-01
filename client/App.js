@@ -57,6 +57,12 @@ export default function App() {
       // manual override takes precedence if provided
       const manual = Number(f.manualPages || 0);
       if (manual > 0) return sum + manual;
+      
+      // Handle detecting state - use 1 as estimate
+      if (f.isDetecting || f.detectedPages === 'detecting...') {
+        return sum + 1; // Temporary estimate while detecting
+      }
+      
       const max = Number(f.detectedPages || 0);
       if (!max) return sum;
       if (f.isPdf && f.selectMode === 'range') {
@@ -69,11 +75,34 @@ export default function App() {
     }, 0);
   }, [files]);
 
-  const totalPrice = () => {
+  const DELIVERY_FEE = 25; // EGP
+  const EMAIL_ATTACHMENT_LIMIT = 30 * 1024 * 1024; // 30MB - should match server limit
+
+  const printingCost = () => {
     const c = Number(copies) || 0;
     const p = Number(totalDetectedPages) || 0;
-    return +(unitPrice() * c * p).toFixed(2);
+    
+    if (sides === 'double') {
+      // For double-sided: calculate sheets needed (pages / 2, rounded up)
+      const sheets = Math.ceil(p / 2);
+      return +(unitPrice() * c * sheets).toFixed(2);
+    } else {
+      // For single-sided: each page is a sheet
+      return +(unitPrice() * c * p).toFixed(2);
+    }
   };
+
+  const totalPrice = () => {
+    const printing = printingCost();
+    const total = printing + DELIVERY_FEE;
+    return +total.toFixed(2);
+  };
+
+  const totalFileSize = useMemo(() => {
+    return files.reduce((sum, f) => sum + (f.size || 0), 0);
+  }, [files]);
+
+  const filesExceedEmailLimit = totalFileSize > EMAIL_ATTACHMENT_LIMIT;
 
   const pickFiles = async () => {
     try {
@@ -112,12 +141,17 @@ export default function App() {
         return;
       }
 
-      // Save first to update UI quickly
-      setFiles(limited);
+      // Save first to update UI quickly with estimated pages
+      const withEstimates = limited.map(f => ({
+        ...f,
+        detectedPages: f.isPdf ? 'detecting...' : 1, // Show immediate estimate
+        isDetecting: f.isPdf
+      }));
+      setFiles(withEstimates);
 
       // Auto-detect pages per file using /api/count-one for better reliability
+      // Process files individually and update UI as each completes
       try {
-        const withPages = [];
         for (let i = 0; i < limited.length; i++) {
           const f = limited[i];
           // Map ext and type
@@ -157,14 +191,20 @@ export default function App() {
           } catch (e) {
             console.log('count-one network error', String(e));
           }
-          withPages.push({
-            ...f,
-            detectedPages: detected,
-            rangeTo: String(detected || 1),
-            localPath: dest,
-          });
+          
+          // Update this specific file immediately
+          setFiles(currentFiles => 
+            currentFiles.map((file, index) => 
+              index === i ? {
+                ...file,
+                detectedPages: detected,
+                rangeTo: String(detected || 1),
+                localPath: dest,
+                isDetecting: false
+              } : file
+            )
+          );
         }
-        setFiles(withPages);
       } catch (e) {
         // Non-fatal fallback; pages remain unset for manual entry
       }
@@ -323,8 +363,13 @@ export default function App() {
             <Text style={{ color: theme.text, fontWeight: '600' }}>Estimated Price</Text>
             <Text style={{ color: theme.muted }}>
               Unit: EGP {unitPrice()} • Copies: {copies || '0'} • Pages: {totalDetectedPages}
+              {sides === 'double' ? ` • Sheets: ${Math.ceil(totalDetectedPages / 2)}` : ''}
             </Text>
-            <Text style={{ color: theme.primaryDark, fontSize: 18, fontWeight: '700' }}>Total: EGP {totalPrice()}</Text>
+            <View style={{ marginTop: 4 }}>
+              <Text style={{ color: theme.text }}>Printing: EGP {printingCost()}</Text>
+              <Text style={{ color: theme.text }}>Delivery: EGP {DELIVERY_FEE}</Text>
+            </View>
+            <Text style={{ color: theme.primaryDark, fontSize: 18, fontWeight: '700', marginTop: 4 }}>Total: EGP {totalPrice()}</Text>
           </View>
         </View>
 
@@ -333,13 +378,30 @@ export default function App() {
             <Text style={{ fontWeight: '600', color: theme.text }}>Files ({files.length}/5)</Text>
             <PrimaryButton title="Add Files" onPress={pickFiles} />
           </View>
+          
+          {/* File size warning */}
+          {filesExceedEmailLimit && (
+            <View style={{ marginTop: 8, padding: 8, borderRadius: 6, backgroundColor: '#fef3c7', borderWidth: 1, borderColor: '#f59e0b' }}>
+              <Text style={{ color: '#92400e', fontSize: 12, fontWeight: '600' }}>⚠️ Large Files Warning</Text>
+              <Text style={{ color: '#92400e', fontSize: 11, marginTop: 2 }}>
+                Total size: {(totalFileSize / 1024 / 1024).toFixed(1)}MB exceeds email limit (30MB). 
+                PDFs will be prioritized for email attachment. Your order will still be processed normally.
+              </Text>
+            </View>
+          )}
           <View style={{ marginTop: 8 }}>
             {files.map((item, index) => (
               <View key={item.uri + index} style={{ paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: theme.border }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                   <View style={{ flex: 1, paddingRight: 8 }}>
                     <Text numberOfLines={1} style={{ color: theme.text }}>{item.name}</Text>
-                    <Text style={{ color: theme.muted, fontSize: 12 }}>{item.mimeType || 'file'} • Pages: {item.manualPages ? item.manualPages : (item.detectedPages ?? '?')}</Text>
+                    <Text style={{ color: theme.muted, fontSize: 12 }}>
+                      {item.mimeType || 'file'} • Pages: {
+                        item.manualPages ? item.manualPages : 
+                        item.isDetecting ? '🔄 detecting...' : 
+                        (item.detectedPages ?? '?')
+                      }
+                    </Text>
                   </View>
                   <TouchableOpacity onPress={() => removeFile(index)}>
                     <Text style={{ color: theme.danger, fontWeight: '600' }}>Remove</Text>
@@ -410,19 +472,34 @@ export default function App() {
           </View>
         </View>
 
-        {submitting ? (
-          <View style={{ alignItems: 'center', marginVertical: 12 }}>
-            <ActivityIndicator size="large" color={theme.primary} />
-            <Text style={{ marginTop: 8, color: theme.muted }}>Uploading... {progress}%</Text>
+        {/* Contact Support Section */}
+        <View style={{ backgroundColor: theme.card, borderRadius: 12, padding: 12, borderWidth: 1, borderColor: theme.border, marginBottom: 12 }}>
+          <Text style={{ fontWeight: '600', color: theme.text, marginBottom: 8 }}>Need Help?</Text>
+          <Text style={{ color: theme.muted, fontSize: 12, marginBottom: 8 }}>
+            If you face any issues or have questions, feel free to contact us:
+          </Text>
+          
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
+            <Text style={{ color: theme.text, fontSize: 13, fontWeight: '500' }}>📞 Phone: </Text>
+            <TouchableOpacity onPress={() => Linking.openURL('tel:01018611693')}>
+              <Text style={{ color: theme.primary, fontSize: 13, textDecorationLine: 'underline' }}>
+                01018611693
+              </Text>
+            </TouchableOpacity>
           </View>
-        ) : null}
+          
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Text style={{ color: theme.text, fontSize: 13, fontWeight: '500' }}>📧 Email: </Text>
+            <TouchableOpacity onPress={() => Linking.openURL('mailto:abdelhaiattia@gmail.com?subject=Print4me Support')}>
+              <Text style={{ color: theme.primary, fontSize: 13, textDecorationLine: 'underline' }}>
+                abdelhaiattia@gmail.com
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
 
-        <PrimaryButton title="Submit Print Request" onPress={submit} disabled={submitting} full />
-
-        <Text style={{ marginTop: 12, color: theme.muted, fontSize: 12 }}>
-          API: {apiBaseUrl.replace(/\/$/, '')}/api/print-request
-        </Text>
-        </ScrollView>
+        <PrimaryButton title={submitting ? 'Submitting...' : 'Submit Print Request'} onPress={submit} disabled={submitting || !name || !mobile || !address || files.length === 0} />
+      </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

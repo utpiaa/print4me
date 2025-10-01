@@ -3,7 +3,7 @@
     "name": "Print4me",
     "slug": "print4me",
     "scheme": "print4me",
-    "version": "1.0.0",
+    "version": "1.0.2",
     "sdkVersion": "54.0.0",
     "orientation": "portrait",
     "platforms": [
@@ -23,6 +23,7 @@
     },
     "android": {
       "package": "com.abdelhaiattia.print4me",
+      "versionCode": 3,
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#1976d2"

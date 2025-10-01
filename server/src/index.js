@@ -327,9 +327,23 @@ app.post('/api/print-request', upload.array('files', 5), async (req, res) => {
     if (m === 'color' && s === 'double') return 7.0;
     return 1.0;
   }
+  const DELIVERY_FEE = 25; // EGP
   const unit = unitPriceEGP(colorMode, sides);
-  const estimatedTotal = Number((unit * pagesNum * copiesNum).toFixed(2));
-  const priceBreakdown = `EGP ${unit} × ${pagesNum} pages × ${copiesNum} copies = EGP ${estimatedTotal}`;
+  let sheetsNum, printingCost, estimatedTotal, priceBreakdown;
+  
+  if (sides === 'double') {
+    // For double-sided: calculate sheets needed (pages / 2, rounded up)
+    sheetsNum = Math.ceil(pagesNum / 2);
+    printingCost = Number((unit * sheetsNum * copiesNum).toFixed(2));
+    estimatedTotal = Number((printingCost + DELIVERY_FEE).toFixed(2));
+    priceBreakdown = `Printing: EGP ${unit} × ${sheetsNum} sheets (${pagesNum} pages double-sided) × ${copiesNum} copies = EGP ${printingCost} + Delivery: EGP ${DELIVERY_FEE} = Total: EGP ${estimatedTotal}`;
+  } else {
+    // For single-sided: each page is a sheet
+    sheetsNum = pagesNum;
+    printingCost = Number((unit * pagesNum * copiesNum).toFixed(2));
+    estimatedTotal = Number((printingCost + DELIVERY_FEE).toFixed(2));
+    priceBreakdown = `Printing: EGP ${unit} × ${pagesNum} pages × ${copiesNum} copies = EGP ${printingCost} + Delivery: EGP ${DELIVERY_FEE} = Total: EGP ${estimatedTotal}`;
+  }
 
   if (errors.length > 0) {
     // Clean up uploaded temp files if validation fails
@@ -355,8 +369,9 @@ app.post('/api/print-request', upload.array('files', 5), async (req, res) => {
       `Sides: ${sides || 'single'}\n` +
       `Copies: ${copiesNum}\n` +
       `Pages: ${pagesNum}\n` +
-      `Estimated Total: EGP ${estimatedTotal}\n` +
-      `Breakdown: ${priceBreakdown}\n` +
+      `Printing Cost: EGP ${printingCost}\n` +
+      `Delivery Fee: EGP ${DELIVERY_FEE}\n` +
+      `Total: EGP ${estimatedTotal}\n` +
       (notes ? `Notes: ${notes}\n` : '') +
       `Files: ${req.files.map(f => f.originalname).join(', ')}`;
 
@@ -370,8 +385,9 @@ app.post('/api/print-request', upload.array('files', 5), async (req, res) => {
       <p><strong>Sides:</strong> ${escapeHtml(sides || 'single')}</p>
       <p><strong>Copies:</strong> ${escapeHtml(String(copiesNum))}</p>
       <p><strong>Pages:</strong> ${escapeHtml(String(pagesNum))}</p>
-      <p><strong>Estimated Total:</strong> EGP ${escapeHtml(String(estimatedTotal))}</p>
-      <p><strong>Breakdown:</strong> ${escapeHtml(priceBreakdown)}</p>
+      <p><strong>Printing Cost:</strong> EGP ${escapeHtml(String(printingCost))}</p>
+      <p><strong>Delivery Fee:</strong> EGP ${escapeHtml(String(DELIVERY_FEE))}</p>
+      <p><strong>Total:</strong> EGP ${escapeHtml(String(estimatedTotal))}</p>
       ${notes ? `<p><strong>Notes:</strong> ${escapeHtml(notes)}</p>` : ''}
       <p><strong>Files:</strong></p>
       <ul>
@@ -379,15 +395,36 @@ app.post('/api/print-request', upload.array('files', 5), async (req, res) => {
       </ul>
     `;
 
-    // Decide whether to attach files based on combined size
-    const combinedSize = (req.files || []).reduce((s, f) => s + (Number(f.size) || 0), 0);
-    const ATTACHMENT_LIMIT = Number(process.env.ATTACHMENT_LIMIT_BYTES || 20 * 1024 * 1024); // 20MB
+    // Smart file attachment - include files up to the limit, prioritizing PDFs
+    const ATTACHMENT_LIMIT = Number(process.env.ATTACHMENT_LIMIT_BYTES || 30 * 1024 * 1024); // 30MB
+    const sortedFiles = (req.files || []).sort((a, b) => {
+      // Prioritize PDFs over images
+      const aIsPdf = a.mimetype === 'application/pdf';
+      const bIsPdf = b.mimetype === 'application/pdf';
+      if (aIsPdf && !bIsPdf) return -1;
+      if (!aIsPdf && bIsPdf) return 1;
+      // Then by size (smaller first)
+      return (a.size || 0) - (b.size || 0);
+    });
+    
     let attachments = [];
+    let currentSize = 0;
+    let skippedFiles = [];
+    
+    for (const f of sortedFiles) {
+      const fileSize = Number(f.size) || 0;
+      if (currentSize + fileSize <= ATTACHMENT_LIMIT) {
+        attachments.push({ filename: f.originalname, path: f.path });
+        currentSize += fileSize;
+      } else {
+        skippedFiles.push(f.originalname);
+      }
+    }
+    
+    const combinedSize = (req.files || []).reduce((s, f) => s + (Number(f.size) || 0), 0);
     let noteTooLarge = '';
-    if (combinedSize <= ATTACHMENT_LIMIT) {
-      attachments = req.files.map((f) => ({ filename: f.originalname, path: f.path }));
-    } else {
-      noteTooLarge = `\n\n[Note] Attachments not included (combined size ${(combinedSize/1024/1024).toFixed(1)}MB exceeds limit).`;
+    if (skippedFiles.length > 0) {
+      noteTooLarge = `\n\n[Note] Some files not attached due to size limit (${(combinedSize/1024/1024).toFixed(1)}MB total). Skipped: ${skippedFiles.join(', ')}. Included: ${attachments.map(a => a.filename).join(', ')}.`;
     }
 
     // Respond to client immediately to avoid timeout
